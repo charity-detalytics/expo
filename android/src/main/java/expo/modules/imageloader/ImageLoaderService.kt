@@ -3,7 +3,10 @@ package expo.modules.imageloader
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.os.Handler
+import android.os.Looper
 import com.bumptech.glide.Glide
+import com.bumptech.glide.RequestManager
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.request.target.CustomTarget
 import com.bumptech.glide.request.transition.Transition
@@ -32,23 +35,11 @@ class ImageLoaderService(val context: Context) : ImageLoaderInterface {
     url: String,
     resultListener: ImageLoaderInterface.ResultListener
   ) {
-    Glide.with(context)
+    val requestManager = Glide.with(context)
+    requestManager
       .asBitmap()
       .load(url)
-      .into(object : CustomTarget<Bitmap>() {
-        override fun onResourceReady(resource: Bitmap, transition: Transition<in Bitmap>?) {
-          resultListener.onSuccess(resource)
-        }
-
-        override fun onLoadCleared(placeholder: Drawable?) {
-          // no op
-        }
-
-        override fun onLoadFailed(errorDrawable: Drawable?) {
-          super.onLoadFailed(errorDrawable)
-          resultListener.onFailure(Exception("Loading bitmap failed"))
-        }
-      })
+      .into(resultListenerTarget(requestManager, resultListener))
   }
 
   override fun loadImageForManipulationFromURL(url: String): Future<Bitmap> {
@@ -69,26 +60,45 @@ class ImageLoaderService(val context: Context) : ImageLoaderInterface {
     resultListener: ImageLoaderInterface.ResultListener
   ) {
     val normalizedUrl = normalizeAssetsUrl(url)
+    val requestManager = Glide.with(context)
 
-    Glide.with(context)
+    requestManager
       .asBitmap()
       .diskCacheStrategy(DiskCacheStrategy.NONE)
       .skipMemoryCache(true)
       .load(normalizedUrl)
-      .into(object : CustomTarget<Bitmap>() {
-        override fun onResourceReady(resource: Bitmap, transition: Transition<in Bitmap>?) {
-          resultListener.onSuccess(resource)
-        }
+      .into(resultListenerTarget(requestManager, resultListener))
+  }
 
-        override fun onLoadCleared(placeholder: Drawable?) {
-          // no op
-        }
+  private fun resultListenerTarget(
+    requestManager: RequestManager,
+    resultListener: ImageLoaderInterface.ResultListener
+  ): CustomTarget<Bitmap> {
+    return object : CustomTarget<Bitmap>() {
+      private var hasResult = false
 
-        override fun onLoadFailed(errorDrawable: Drawable?) {
-          super.onLoadFailed(errorDrawable)
-          resultListener.onFailure(Exception("Loading bitmap failed"))
+      override fun onResourceReady(resource: Bitmap, transition: Transition<in Bitmap>?) {
+        if (hasResult) {
+          return
         }
-      })
+        hasResult = true
+        resultListener.onSuccess(resource)
+      }
+
+      override fun onLoadCleared(placeholder: Drawable?) {
+        // no op
+      }
+
+      override fun onLoadFailed(errorDrawable: Drawable?) {
+        super.onLoadFailed(errorDrawable)
+        if (hasResult) {
+          return
+        }
+        hasResult = true
+        resultListener.onFailure(Exception("Loading bitmap failed"))
+        Handler(Looper.getMainLooper()).post { requestManager.clear(this) }
+      }
+    }
   }
 
   private fun normalizeAssetsUrl(url: String): String {
